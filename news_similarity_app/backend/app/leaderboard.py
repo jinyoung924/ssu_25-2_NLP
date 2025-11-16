@@ -1,18 +1,37 @@
+from fastapi import APIRouter, HTTPException, Depends
+from .schemas import URLRequest
+from . import database, model, leaderboard
 from sqlalchemy.orm import Session
-from collections import defaultdict
-from . import models
 
-def update_leaderboard(db: Session, publisher, score):
-    db_score = models.Score(publisher=publisher, score=score)
-    db.add(db_score)
-    db.commit()
+router = APIRouter()
 
-def get_leaderboard(db: Session):
-    records = db.query(models.Score).all()
-    pub_scores = defaultdict(list)
-    for r in records:
-        pub_scores[r.publisher].append(r.score)
-    return [
-        {"publisher": p, "avg_score": round(sum(v)/len(v), 4)}
-        for p, v in pub_scores.items()
-    ]
+
+@router.post("/analyze")
+def analyze_news(data: URLRequest, db: Session = Depends(database.get_db)):
+    try:
+        # URL에서 기사 추출
+        title, body, publisher = model.extract_article(data.url)
+
+        # 기사 요약 및 유사도 분석
+        result = model.summarize_article(title, body)
+
+        # 리더보드 업데이트
+        leaderboard.update_leaderboard(db, publisher, result["similarity"])
+
+        return {
+            "title": title,
+            "body": body[:300],
+            "summary": result["summary"],
+            "similarity_score": result["similarity"],
+            "label": result["label"],
+            "threshold": result["threshold"],
+            "publisher": publisher
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/leaderboard")
+def leaderboard_api(db: Session = Depends(database.get_db)):
+    return leaderboard.get_leaderboard(db)
